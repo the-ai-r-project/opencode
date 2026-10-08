@@ -324,6 +324,25 @@ export interface Hooks {
     },
     output: { enabled: boolean },
   ) => Promise<void>
+  /**
+   * Called when an agent turn finishes without pending tool calls and the loop is about to stop.
+   * Set `output.continue = true` and `output.reason` to reject completion. The reason is added
+   * as a synthetic user message and the agent keeps working. Not called when the turn errored,
+   * was aborted, or ended with tool calls. Capped at 5 forced continuations per loop run.
+   */
+  "agent.stop"?: (
+    input: {
+      sessionID: string
+      agent?: string
+      messageID?: string
+      stopHookActive: boolean
+      stopContinuations: number
+    },
+    output: {
+      continue?: boolean
+      reason?: string
+    },
+  ) => Promise<void>
   "experimental.text.complete"?: (
     input: { sessionID: string; messageID: string; partID: string },
     output: { text: string },
