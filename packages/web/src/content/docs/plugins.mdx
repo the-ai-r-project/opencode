@@ -387,3 +387,29 @@ Format as a structured prompt that a new agent can use to resume work.
 ```
 
 When `output.prompt` is set, it completely replaces the default compaction prompt. The `output.context` array is ignored in this case.
+
+---
+
+### Stop hook
+
+The `agent.stop` hook allows plugins to inspect workspace state when an agent turn finishes without pending tool calls, before the prompt loop exits. Plugins can reject completion by setting `output.continue = true` and providing an `output.reason`:
+
+```ts
+import type { Plugin } from "@opencode-ai/plugin"
+
+export default (async () => {
+  return {
+    "agent.stop": async (input, output) => {
+      if (input.stopHookActive) return
+      // Inspect verification or simulation results
+      output.continue = true
+      output.reason = "Please run required verification checks before completing."
+    },
+  }
+}) satisfies Plugin
+```
+
+- **When it fires**: Only on clean stops without pending tool calls (not on errors, aborts, or tool-executing turns).
+- **Loop protection**: Capped at 5 forced continuations per loop run to prevent infinite loops.
+- **Continuation**: When rejected, `output.reason` is added as a synthetic user message and the agent continues.
+

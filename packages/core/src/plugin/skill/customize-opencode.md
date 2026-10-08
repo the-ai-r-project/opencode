@@ -347,6 +347,7 @@ Hook surface (mutate `output` in place; return `void`):
 - `event(input)`: every bus event
 - `config(cfg)`: once on init with the merged config
 - `chat.message`, `chat.params`, `chat.headers`
+- `agent.stop`: reject completion by setting `output.continue = true` and `output.reason`
 - `tool.execute.before`, `tool.execute.after`
 - `tool.definition`
 - `command.execute.before`
