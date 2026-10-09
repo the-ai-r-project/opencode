@@ -62,6 +62,10 @@ export const ContentFilterError = namedError("ContentFilterError", {
   message: Schema.String,
 })
 
+export class PromptAbortedError extends Schema.TaggedErrorClass<PromptAbortedError>()("PromptAbortedError", {
+  message: Schema.String,
+}) {}
+
 export class OutputFormatText extends Schema.Class<OutputFormatText>("OutputFormatText")({
   type: Schema.Literal("text"),
 }) {}

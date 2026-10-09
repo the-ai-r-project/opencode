@@ -390,6 +390,35 @@ When `output.prompt` is set, it completely replaces the default compaction promp
 
 ---
 
+### Agent start hook
+
+The `agent.start` hook allows plugins to inject context or abort execution before the LLM is invoked:
+
+```ts
+import type { Plugin } from "@opencode-ai/plugin"
+
+export default (async () => {
+  return {
+    "agent.start": async (input, output) => {
+      // Inject synthetic context
+      output.context = ["Additional workspace context or instructions"]
+
+      // Or abort turn before model execution
+      if (shouldAbort(input)) {
+        output.abort = true
+        output.reason = "Turn aborted by policy"
+      }
+    },
+  }
+}) satisfies Plugin
+```
+
+- **When it fires**: At the start of an agent turn/prompt, after creating the user message and before any model execution.
+- **Context injection**: Strings in `output.context` are appended as synthetic text parts to the user message.
+- **Pre-flight abort**: When `output.abort` is true, prompt execution stops immediately, producing an assistant message with error finish and `PromptAbortedError`.
+
+---
+
 ### Stop hook
 
 The `agent.stop` hook allows plugins to inspect workspace state when an agent turn finishes without pending tool calls, before the prompt loop exits. Plugins can reject completion by setting `output.continue = true` and providing an `output.reason`:
