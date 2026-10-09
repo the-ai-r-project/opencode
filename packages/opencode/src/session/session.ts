@@ -448,8 +448,10 @@ export interface Interface {
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
+  readonly createMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
+  readonly createPart: <T extends SessionV1.Part>(part: T) => Effect.Effect<T>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
   readonly getPart: (input: {
     sessionID: SessionID
@@ -924,8 +926,10 @@ const layer: Layer.Layer<
       messages,
       children,
       remove,
+      createMessage: updateMessage,
       updateMessage,
       removeMessage,
+      createPart: updatePart,
       removePart,
       updatePart,
       getPart,

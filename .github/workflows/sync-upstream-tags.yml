@@ -1,0 +1,27 @@
+name: sync-upstream-tags
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch and push upstream tags and dev branch
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode.git || git remote set-url upstream https://github.com/anomalyco/opencode.git
+          git fetch upstream --tags
+          git fetch upstream dev
+          git push origin --tags
+          git push origin refs/remotes/upstream/dev:refs/heads/dev

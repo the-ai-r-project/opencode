@@ -22,6 +22,7 @@ export {
   Part,
   PartID,
   PatchPart,
+  PromptAbortedError,
   Range,
   ReasoningPart,
   ResourceSource,

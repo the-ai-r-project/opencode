@@ -1061,6 +1061,80 @@ const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
+      const start = yield* plugin
+        .trigger(
+          "agent.start",
+          {
+            sessionID: input.sessionID,
+            agent: message.info.agent,
+            model: message.info.model,
+            messageID: message.info.id,
+          },
+          { context: [], abort: false, reason: "" },
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("agent.start hook failed", {
+              "session.id": input.sessionID,
+              error: Cause.squash(cause),
+            }).pipe(Effect.as({ context: [] as string[], abort: false, reason: "" })),
+          ),
+        )
+
+      if (start.abort) {
+        const ctx = yield* InstanceState.context
+        const reason = typeof start.reason === "string" && start.reason.trim() ? start.reason.trim() : "Prompt aborted"
+        const assistant: SessionV1.Assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: message.info.id,
+          sessionID: input.sessionID,
+          mode: message.info.agent,
+          agent: message.info.agent,
+          variant: message.info.model.variant,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: message.info.model.modelID,
+          providerID: message.info.model.providerID,
+          time: { created: Date.now(), completed: Date.now() },
+          finish: "error",
+          error: new SessionV1.PromptAbortedError({ message: reason }) as unknown as SessionV1.Assistant["error"],
+        })
+        const part: SessionV1.TextPart = yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: input.sessionID,
+          type: "text",
+          synthetic: true,
+          text: reason,
+          time: {
+            start: Date.now(),
+            end: Date.now(),
+          },
+        })
+        return { info: assistant, parts: [part] }
+      }
+
+      if (Array.isArray(start.context) && start.context.length > 0) {
+        for (const item of start.context) {
+          if (typeof item !== "string" || !item) continue
+          const part: SessionV1.TextPart = yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: message.info.id,
+            sessionID: input.sessionID,
+            type: "text",
+            synthetic: true,
+            text: item,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          })
+          message.parts.push(part)
+        }
+      }
+
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
         permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
