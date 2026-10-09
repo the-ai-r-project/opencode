@@ -325,6 +325,27 @@ export interface Hooks {
     output: { enabled: boolean },
   ) => Promise<void>
   /**
+   * Called when an agent turn/prompt starts, before LLM execution.
+   * Allows plugins to inject context or abort the turn before inference.
+   *
+   * - `context`: Extra context strings appended as synthetic text parts to the user message.
+   * - `abort`: If true, aborts prompt execution immediately before any model call.
+   * - `reason`: Reason for aborting (displayed to the user).
+   */
+  "agent.start"?: (
+    input: {
+      sessionID: string
+      agent?: string
+      model?: { providerID: string; modelID: string }
+      messageID?: string
+    },
+    output: {
+      context?: string[]
+      abort?: boolean
+      reason?: string
+    },
+  ) => Promise<void>
+  /**
    * Called when an agent turn finishes without pending tool calls and the loop is about to stop.
    * Set `output.continue = true` and `output.reason` to reject completion. The reason is added
    * as a synthetic user message and the agent keeps working. Not called when the turn errored,
