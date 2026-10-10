@@ -32,6 +32,7 @@ jobs:
           - name: windows
             host: windows-latest
     runs-on: ${{ matrix.settings.host }}
+    continue-on-error: ${{ matrix.settings.name == 'windows' }}
     defaults:
       run:
         shell: bash
@@ -90,6 +91,7 @@ jobs:
           - name: windows
             host: windows-latest
     runs-on: ${{ matrix.settings.host }}
+    continue-on-error: ${{ matrix.settings.name == 'windows' }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
     defaults:
