@@ -330,6 +330,13 @@ export type ApiError = {
   }
 }
 
+export type PromptAbortedError = {
+  name: "PromptAbortedError"
+  data: {
+    message: string
+  }
+}
+
 export type AssistantMessage = {
   id: string
   sessionID: string
@@ -347,6 +354,7 @@ export type AssistantMessage = {
     | ContextOverflowError
     | ContentFilterError
     | ApiError
+    | PromptAbortedError
   parentID: string
   modelID: string
   providerID: string
@@ -1223,6 +1231,7 @@ export type GlobalEvent = {
             | ContextOverflowError
             | ContentFilterError
             | ApiError
+            | PromptAbortedError
         }
       }
     | {
@@ -5365,6 +5374,7 @@ export type SessionError = {
       | ContextOverflowError
       | ContentFilterError
       | ApiError
+      | PromptAbortedError
   }
 }
 
@@ -6690,6 +6700,7 @@ export type EventSessionError = {
       | ContextOverflowError
       | ContentFilterError
       | ApiError
+      | PromptAbortedError
   }
 }
 

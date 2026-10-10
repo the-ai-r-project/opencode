@@ -338,6 +338,8 @@ export interface Hooks {
       agent?: string
       model?: { providerID: string; modelID: string }
       messageID?: string
+      isSubagent?: boolean
+      noReply?: boolean
     },
     output: {
       context?: string[]
