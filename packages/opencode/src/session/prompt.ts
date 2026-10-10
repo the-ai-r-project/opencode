@@ -1061,6 +1061,15 @@ const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
+      const permissions: PermissionV1.Rule[] = []
+      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+      }
+      if (permissions.length > 0) {
+        session.permission = permissions
+        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+      }
+
       const start = yield* plugin
         .trigger(
           "agent.start",
@@ -1069,6 +1078,8 @@ const layer = Layer.effect(
             agent: message.info.agent,
             model: message.info.model,
             messageID: message.info.id,
+            isSubagent: Boolean(session.parentID),
+            noReply: Boolean(input.noReply),
           },
           { context: [], abort: false, reason: "" },
         )
@@ -1082,6 +1093,7 @@ const layer = Layer.effect(
         )
 
       if (start.abort) {
+        if (input.noReply === true) return message
         const ctx = yield* InstanceState.context
         const reason = typeof start.reason === "string" && start.reason.trim() ? start.reason.trim() : "Prompt aborted"
         const assistant: SessionV1.Assistant = yield* sessions.updateMessage({
@@ -1099,7 +1111,10 @@ const layer = Layer.effect(
           providerID: message.info.model.providerID,
           time: { created: Date.now(), completed: Date.now() },
           finish: "error",
-          error: new SessionV1.PromptAbortedError({ message: reason }) as unknown as SessionV1.Assistant["error"],
+          error: {
+            name: "PromptAbortedError",
+            data: { message: reason },
+          },
         })
         const part: SessionV1.TextPart = yield* sessions.updatePart({
           id: PartID.ascending(),
@@ -1133,15 +1148,6 @@ const layer = Layer.effect(
           })
           message.parts.push(part)
         }
-      }
-
-      const permissions: PermissionV1.Rule[] = []
-      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-      }
-      if (permissions.length > 0) {
-        session.permission = permissions
-        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
       if (input.noReply === true) return message

@@ -62,9 +62,10 @@ export const ContentFilterError = namedError("ContentFilterError", {
   message: Schema.String,
 })
 
-export class PromptAbortedError extends Schema.TaggedErrorClass<PromptAbortedError>()("PromptAbortedError", {
+export const PromptAbortedError = namedError("PromptAbortedError", {
   message: Schema.String,
-}) {}
+})
+export type PromptAbortedError = Schema.Schema.Type<typeof PromptAbortedError.Schema>
 
 export class OutputFormatText extends Schema.Class<OutputFormatText>("OutputFormatText")({
   type: Schema.Literal("text"),
@@ -395,6 +396,7 @@ const AssistantErrorSchema = Schema.Union([
   ContextOverflowError.EffectSchema,
   ContentFilterError.EffectSchema,
   APIError.EffectSchema,
+  PromptAbortedError.EffectSchema,
 ]).annotate({ discriminator: "name" })
 type AssistantError = Schema.Schema.Type<typeof AssistantErrorSchema>
 
