@@ -1,5 +1,6 @@
 import { ConfigProvider, Effect, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
+import { NpmTest } from "../../fake/npm"
 import { parse } from "./assertions"
 import { runtime, type Runtime } from "./runtime"
 import type { ActiveScenario, BackendApp, CallResult, CaptureMode, SeededContext } from "./types"
@@ -58,6 +59,7 @@ function app(modules: Runtime, options: CallOptions) {
 
   const web = HttpRouter.toWebHandler(
     modules.HttpApiApp.routes.pipe(
+      Layer.provide(NpmTest.noop),
       Layer.provide(
         ConfigProvider.layer(
           ConfigProvider.fromUnknown({ OPENCODE_SERVER_PASSWORD: password, OPENCODE_SERVER_USERNAME: username }),
