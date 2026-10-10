@@ -6,6 +6,7 @@ const preserveExerciseGlobalRoot = !!process.env.OPENCODE_HTTPAPI_EXERCISE_GLOBA
 export const exerciseGlobalRoot =
   process.env.OPENCODE_HTTPAPI_EXERCISE_GLOBAL ??
   path.join(process.env.TMPDIR ?? "/tmp", `opencode-httpapi-global-${process.pid}`)
+delete process.env.OPENCODE_CONFIG_DIR
 process.env.XDG_DATA_HOME = path.join(exerciseGlobalRoot, "data")
 process.env.XDG_CONFIG_HOME = path.join(exerciseGlobalRoot, "config")
 process.env.XDG_STATE_HOME = path.join(exerciseGlobalRoot, "state")

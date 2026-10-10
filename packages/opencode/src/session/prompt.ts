@@ -81,6 +81,10 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
+export const MAX_STOP_CONTINUATIONS = 5
+const MAX_STOP_REASON_LENGTH = 50_000
+const DEFAULT_STOP_REASON = "A stop hook asked you to keep working. Continue the task."
+
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
   const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
@@ -1066,6 +1070,86 @@ const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
+      const start = yield* plugin
+        .trigger(
+          "agent.start",
+          {
+            sessionID: input.sessionID,
+            agent: message.info.agent,
+            model: message.info.model,
+            messageID: message.info.id,
+            isSubagent: Boolean(session.parentID),
+            noReply: Boolean(input.noReply),
+          },
+          { context: [], abort: false, reason: "" },
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("agent.start hook failed", {
+              "session.id": input.sessionID,
+              error: Cause.squash(cause),
+            }).pipe(Effect.as({ context: [] as string[], abort: false, reason: "" })),
+          ),
+        )
+
+      if (start.abort) {
+        if (input.noReply === true) return message
+        const ctx = yield* InstanceState.context
+        const reason = typeof start.reason === "string" && start.reason.trim() ? start.reason.trim() : "Prompt aborted"
+        const assistant: SessionV1.Assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: message.info.id,
+          sessionID: input.sessionID,
+          mode: message.info.agent,
+          agent: message.info.agent,
+          variant: message.info.model.variant,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: message.info.model.modelID,
+          providerID: message.info.model.providerID,
+          time: { created: Date.now(), completed: Date.now() },
+          finish: "error",
+          error: {
+            name: "PromptAbortedError",
+            data: { message: reason },
+          },
+        })
+        const part: SessionV1.TextPart = yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: input.sessionID,
+          type: "text",
+          synthetic: true,
+          text: reason,
+          time: {
+            start: Date.now(),
+            end: Date.now(),
+          },
+        })
+        return { info: assistant, parts: [part] }
+      }
+
+      if (Array.isArray(start.context) && start.context.length > 0) {
+        for (const item of start.context) {
+          if (typeof item !== "string" || !item) continue
+          const part: SessionV1.TextPart = yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: message.info.id,
+            sessionID: input.sessionID,
+            type: "text",
+            synthetic: true,
+            text: item,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          })
+          message.parts.push(part)
+        }
+      }
+
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })
@@ -1083,6 +1167,7 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let stopContinuations = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1114,6 +1199,70 @@ const layer = Layer.effect(
             !hasToolCalls &&
             lastAssistant.parentID === lastUser.id
           ) {
+            if (!lastAssistant.error && stopContinuations < MAX_STOP_CONTINUATIONS) {
+              const stop = yield* plugin
+                .trigger(
+                  "agent.stop",
+                  {
+                    sessionID,
+                    agent: lastUser.agent,
+                    messageID: lastAssistant.id,
+                    stopHookActive: stopContinuations > 0,
+                    stopContinuations,
+                  },
+                  { continue: false, reason: "" },
+                )
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("agent.stop hook failed", {
+                      "session.id": sessionID,
+                      error: Cause.squash(cause),
+                    }).pipe(Effect.as({ continue: false, reason: "" })),
+                  ),
+                )
+
+              if (stop.continue) {
+                stopContinuations++
+                yield* Effect.logInfo("agent.stop triggered continuation", {
+                  "session.id": sessionID,
+                  stopContinuations,
+                })
+
+                const continueMsg = yield* sessions.updateMessage({
+                  id: MessageID.ascending(),
+                  role: "user",
+                  sessionID,
+                  time: { created: Date.now() },
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                  format: lastUser.format,
+                  tools: lastUser.tools,
+                  system: lastUser.system,
+                })
+
+                const text = (typeof stop.reason === "string" && stop.reason.trim()
+                  ? stop.reason.trim()
+                  : DEFAULT_STOP_REASON
+                ).slice(0, MAX_STOP_REASON_LENGTH)
+
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: continueMsg.id,
+                  sessionID,
+                  type: "text",
+                  synthetic: true,
+                  metadata: { stop_continue: true },
+                  text,
+                  time: {
+                    start: Date.now(),
+                    end: Date.now(),
+                  },
+                })
+
+                continue
+              }
+            }
+
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
             )
