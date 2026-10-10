@@ -132,6 +132,7 @@ const targets = singleFlag
 
       return true
     })
+  // Cross-compilation targets include win32 for downstream signing
   : allTargets
 
 await $`rm -rf dist`
