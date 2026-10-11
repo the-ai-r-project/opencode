@@ -1,0 +1,98 @@
+name: jessy-release
+
+# Builds the macOS CLI for fork releases (vX.Y.Z-jessy.N). Upstream's publish.yml
+# needs Apple/Azure/npm/AUR secrets this fork does not have and stays disabled.
+# Release and tag events read this file from the tagged commit, so it must be
+# carried onto every new release-*-jessy branch together with the other fork commits.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.19.0-jessy.1"
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/jessy-release.yml
+      - packages/opencode/script/build.ts
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jessy-release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+jobs:
+  build-macos:
+    if: github.repository == 'the-ai-r-project/opencode'
+    # build.ts only re-signs ad-hoc on a darwin host; unsigned darwin binaries get SIGKILLed by macOS.
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [opencode-darwin-arm64, opencode-darwin-x64]
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "channel=ci" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build
+        working-directory: packages/opencode
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: ${{ steps.version.outputs.channel }}
+          OPENCODE_TARGET: ${{ matrix.target }}
+        run: ./script/build.ts
+
+      - name: Verify binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bin="packages/opencode/dist/${{ matrix.target }}/bin/opencode"
+          codesign --verify --strict --verbose=2 "$bin"
+          if [ "${{ matrix.target }}" = opencode-darwin-arm64 ]; then
+            actual=$("$bin" --version)
+            [ "$actual" = "$VERSION" ] || { echo "expected $VERSION, got $actual"; exit 1; }
+          fi
+
+      - name: Package
+        working-directory: packages/opencode/dist/${{ matrix.target }}/bin
+        run: zip -r "$GITHUB_WORKSPACE/${{ matrix.target }}.zip" *
+
+      - name: Upload release asset
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ matrix.target }}.zip
+        # Release assets are pinned by sha256 downstream (jessy-bot Dockerfile), so an
+        # existing asset is never replaced.
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "$ASSET"; then
+            echo "$ASSET is already attached to $TAG, keeping it"
+            exit 0
+          fi
+          gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.target }}.zip
+          if-no-files-found: error
