@@ -1,6 +1,7 @@
 name: jessy-release
 
-# Builds the macOS CLI for fork releases (vX.Y.Z-jessy.N). Upstream's publish.yml
+# Builds the CLI (macOS, Windows) and the desktop app (macOS, Windows) for fork
+# releases (vX.Y.Z-jessy.N). Builds are unsigned (macOS: ad-hoc). Upstream's publish.yml
 # needs Apple/Azure/npm/AUR secrets this fork does not have and stays disabled.
 # Release and tag events read this file from the tagged commit, so it must be
 # carried onto every new release-*-jessy branch together with the other fork commits.
@@ -18,6 +19,7 @@ on:
     paths:
       - .github/workflows/jessy-release.yml
       - packages/opencode/script/build.ts
+      - packages/desktop/electron-builder.config.ts
 
 permissions:
   contents: write
@@ -95,4 +97,196 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: ${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  build-windows-cli:
+    if: github.repository == 'the-ai-r-project/opencode'
+    # Bun cross-compiles windows targets; the native x64 host also runs the smoke test.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [opencode-windows-x64, opencode-windows-arm64]
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "channel=ci" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build
+        working-directory: packages/opencode
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: ${{ steps.version.outputs.channel }}
+          OPENCODE_TARGET: ${{ matrix.target }}
+        run: bun ./script/build.ts
+
+      - name: Verify binary
+        if: matrix.target == 'opencode-windows-x64'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          actual=$("packages/opencode/dist/${{ matrix.target }}/bin/opencode.exe" --version)
+          [ "$actual" = "$VERSION" ] || { echo "expected $VERSION, got $actual"; exit 1; }
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path "packages/opencode/dist/${{ matrix.target }}/bin/*" -DestinationPath "${{ matrix.target }}.zip" -Force
+
+      - name: Upload release asset
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ matrix.target }}.zip
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "$ASSET"; then
+            echo "$ASSET is already attached to $TAG, keeping it"
+            exit 0
+          fi
+          gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ matrix.target }}.zip
+          if-no-files-found: error
+
+  build-desktop:
+    if: github.repository == 'the-ai-r-project/opencode'
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: macos-14
+            target: aarch64-apple-darwin
+            platform_flag: --mac --arm64
+            bun_install_flags: --os=darwin --cpu=arm64
+          - host: macos-15-intel
+            target: x86_64-apple-darwin
+            platform_flag: --mac --x64
+            bun_install_flags: --os=darwin --cpu=x64
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform_flag: --win --x64
+          - host: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            platform_flag: --win --arm64
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      # The desktop app embeds the server in app.asar; prod keeps the ai.opencode.desktop
+      # app id (same user data as upstream) and the updater feed of this fork.
+      OPENCODE_CHANNEL: prod
+      # No Apple/Azure secrets in the fork: never look for a signing identity.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: ${{ matrix.bun_install_flags }}
+
+      - name: Prepare
+        working-directory: packages/desktop
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          RUST_TARGET: ${{ matrix.target }}
+        run: bun ./scripts/prepare.ts
+
+      - name: Build
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+        run: bun run build
+
+      - name: Package
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        # macOS: ad-hoc signature (identity "-"), no notarization; unsigned arm64 apps do not launch.
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts \
+              -c.mac.identity=- -c.mac.notarize=false -c.dmg.sign=false
+          else
+            npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+          fi
+
+      - name: Verify and collect assets
+        working-directory: packages/desktop/dist
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/assets"
+          if [ "$RUNNER_OS" = macOS ]; then
+            app=$(find . -maxdepth 2 -name "*.app" -type d | head -1)
+            [ -n "$app" ] || { echo "no .app bundle"; exit 1; }
+            codesign --verify --deep --strict --verbose=2 "$app"
+            grep -q 'agent.stop' "$app/Contents/Resources/app.asar" || { echo "fork hooks missing in app.asar"; exit 1; }
+            # Ad-hoc signed arm64 apps are killed at launch when the signature is broken: start it once.
+            "$app/Contents/MacOS/OpenCode" > launch.log 2>&1 & pid=$!
+            sleep 30
+            kill -0 "$pid" || { echo "app exited during launch"; cat launch.log; exit 1; }
+            kill "$pid"; rm -f launch.log
+            echo "bundle version: $(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$app/Contents/Info.plist") (tag $VERSION)"
+            arch=$([ "${{ matrix.target }}" = aarch64-apple-darwin ] && echo arm64 || echo x64)
+            tar -czf "$GITHUB_WORKSPACE/assets/opencode-desktop-mac-$arch.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+            cp opencode-desktop-mac-*.dmg "$GITHUB_WORKSPACE/assets/"
+          else
+            ls opencode-desktop-win-*.exe
+            grep -q 'agent.stop' win*-unpacked/resources/app.asar || { echo "fork hooks missing in app.asar"; exit 1; }
+            cp opencode-desktop-win-*.exe "$GITHUB_WORKSPACE/assets/"
+          fi
+          ls -la "$GITHUB_WORKSPACE/assets"
+
+      - name: Upload release assets
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          for file in "$GITHUB_WORKSPACE"/assets/*; do
+            name=$(basename "$file")
+            if grep -qx "$name" <<< "$existing"; then
+              echo "$name is already attached to $TAG, keeping it"
+              continue
+            fi
+            gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-desktop-${{ matrix.target }}
+          path: assets/*
           if-no-files-found: error
