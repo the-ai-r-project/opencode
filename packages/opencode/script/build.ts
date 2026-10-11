@@ -113,7 +113,20 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
+const targets = process.env.OPENCODE_TARGET
+  ? allTargets.filter((item) => {
+      const name = [
+        pkg.name,
+        item.os === "win32" ? "windows" : item.os,
+        item.arch,
+        item.avx2 === false ? "baseline" : undefined,
+        item.abi === undefined ? undefined : item.abi,
+      ]
+        .filter(Boolean)
+        .join("-")
+      return name === process.env.OPENCODE_TARGET
+    })
+  : singleFlag
   ? allTargets.filter((item) => {
       if (item.os !== process.platform || item.arch !== process.arch) {
         return false
