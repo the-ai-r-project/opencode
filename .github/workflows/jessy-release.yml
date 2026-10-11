@@ -196,6 +196,8 @@ jobs:
       OPENCODE_CHANNEL: prod
       # No Apple/Azure secrets in the fork: never look for a signing identity.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # electron-builder skips signing on pull requests; sign ad hoc anyway so PRs test the release bundle.
+      CSC_FOR_PULL_REQUEST: "true"
     defaults:
       run:
         shell: bash
