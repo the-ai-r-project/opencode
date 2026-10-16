@@ -26,7 +26,9 @@ const layer = Layer.effect(
 
     yield* db.run("PRAGMA journal_mode = WAL")
     yield* db.run("PRAGMA synchronous = NORMAL")
-    yield* db.run("PRAGMA busy_timeout = 5000")
+    // Separate opencode processes can share one database file, and every streamed part is a
+    // write: a 5 s wait was not enough for parallel runs, and the failed write ends the process.
+    yield* db.run("PRAGMA busy_timeout = 30000")
     yield* db.run("PRAGMA cache_size = -64000")
     yield* db.run("PRAGMA foreign_keys = ON")
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
