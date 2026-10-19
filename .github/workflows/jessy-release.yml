@@ -271,23 +271,6 @@ jobs:
           security find-identity -v -p codesigning "$keychain" | grep -F "\"$SIGNING_IDENTITY\""
           echo "SIGNING_CERT_SHA1=$(openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)" >> "$GITHUB_ENV"
 
-      - name: Debug signing (temporary)
-        if: runner.os == 'macOS' && env.TAG == ''
-        run: |
-          set +e
-          which -a openssl; openssl version
-          openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -text | sed -n '/X509v3 extensions/,/Signature Algorithm/p'
-          security list-keychains -d user
-          security find-identity -p codesigning
-          security find-certificate -a -c "$SIGNING_IDENTITY" -Z | grep -E "SHA-1|keychain:"
-          security dump-trust-settings -d
-          for i in 1 2 3; do cp /bin/echo "$RUNNER_TEMP/smoke$i"; done
-          echo "--- by name"; codesign -f -s "$SIGNING_IDENTITY" --timestamp=none "$RUNNER_TEMP/smoke1"
-          echo "--- by hash"; codesign -f -s "$SIGNING_CERT_SHA1" --timestamp=none "$RUNNER_TEMP/smoke2"
-          echo "--- by hash + keychain"; codesign -f -s "$SIGNING_CERT_SHA1" --keychain "$RUNNER_TEMP/signing.keychain-db" --timestamp=none "$RUNNER_TEMP/smoke3"
-          security find-identity -p codesigning
-          exit 1
-
       - uses: ./.github/actions/setup-bun
         with:
           install-flags: ${{ matrix.bun_install_flags }}
@@ -329,8 +312,9 @@ jobs:
             [ -n "$app" ] || { echo "no .app bundle"; exit 1; }
             # Check as a client would: without trust in the certificate, against the requirement
             # Squirrel.Mac derives from the installed app.
-            sudo security remove-trusted-cert -d "$RUNNER_TEMP/cert.pem"
+            sudo security remove-trusted-cert -d "$RUNNER_TEMP/cert.pem" || security remove-trusted-cert "$RUNNER_TEMP/cert.pem" || true
             security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+            if security verify-cert -c "$RUNNER_TEMP/cert.pem" -p codeSign > /dev/null 2>&1; then echo "certificate still trusted"; exit 1; fi
             codesign -d -r- "$app"
             codesign --verify --deep --strict --verbose=2 \
               -R="identifier \"ai.opencode.desktop\" and certificate leaf = H\"$SIGNING_CERT_SHA1\"" "$app"
