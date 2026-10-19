@@ -1,8 +1,12 @@
 name: jessy-release
 
 # Builds the CLI (macOS, Windows) and the desktop app (macOS, Windows) for fork
-# releases (vX.Y.Z-jessy.N). Builds are unsigned (macOS: ad-hoc). Upstream's publish.yml
-# needs Apple/Azure/npm/AUR secrets this fork does not have and stays disabled.
+# releases (vX.Y.Z-jessy.N), plus the electron-updater feed (latest.yml, latest-mac.yml).
+# The macOS desktop app is signed with the fork's self-signed "Jessy Works OpenCode"
+# certificate (AWS Secrets Manager, prod account): Squirrel.Mac only installs an update
+# whose signature satisfies the running app's designated requirement, which a fresh
+# ad-hoc signature never does. Windows stays unsigned (verifyUpdateCodeSignature: false).
+# Upstream's publish.yml needs Apple/Azure/npm/AUR secrets this fork does not have and stays disabled.
 # Release and tag events read this file from the tagged commit, so it must be
 # carried onto every new release-*-jessy branch together with the other fork commits.
 
@@ -171,6 +175,9 @@ jobs:
   build-desktop:
     if: github.repository == 'the-ai-r-project/opencode'
     runs-on: ${{ matrix.host }}
+    permissions:
+      contents: write
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -194,10 +201,11 @@ jobs:
       # The desktop app embeds the server in app.asar; prod keeps the ai.opencode.desktop
       # app id (same user data as upstream) and the updater feed of this fork.
       OPENCODE_CHANNEL: prod
-      # No Apple/Azure secrets in the fork: never look for a signing identity.
+      # Only the explicitly named identity is used; never pick up another one from the runner.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      # electron-builder skips signing on pull requests; sign ad hoc anyway so PRs test the release bundle.
+      # electron-builder skips signing on pull requests; sign anyway so PRs test the release bundle.
       CSC_FOR_PULL_REQUEST: "true"
+      SIGNING_IDENTITY: Jessy Works OpenCode
     defaults:
       run:
         shell: bash
@@ -233,14 +241,56 @@ jobs:
           OPENCODE_VERSION: ${{ steps.version.outputs.version }}
         run: bun run build
 
+      - name: Configure AWS credentials
+        if: runner.os == 'macOS' && env.TAG != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::761018868006:role/github-actions-opencode-prod
+          aws-region: eu-central-1
+
+      - name: Import signing identity
+        if: runner.os == 'macOS'
+        # codesign and electron-builder only use a trusted identity, so the self-signed
+        # certificate is trusted for code signing on this runner. Clients need no trust:
+        # Squirrel.Mac compares the certificate hash against the designated requirement.
+        run: |
+          p12="$RUNNER_TEMP/identity.p12"
+          if [ -n "$TAG" ]; then
+            secret=$(aws secretsmanager get-secret-value --secret-id prod/opencode-desktop/macos-codesign --query SecretString --output text)
+            password=$(jq -r .password <<< "$secret")
+            echo "::add-mask::$password"
+            jq -r .p12_base64 <<< "$secret" | base64 --decode > "$p12"
+          else
+            # Pull requests have no access to the secret: a throwaway identity of the same name exercises the same path.
+            password=$(openssl rand -hex 16)
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$SIGNING_IDENTITY" \
+              -addext "basicConstraints=critical,CA:false" -addext "keyUsage=critical,digitalSignature" \
+              -addext "extendedKeyUsage=critical,codeSigning" -keyout "$RUNNER_TEMP/key.pem" -out "$RUNNER_TEMP/cert.pem"
+            openssl pkcs12 -export -inkey "$RUNNER_TEMP/key.pem" -in "$RUNNER_TEMP/cert.pem" -out "$p12" -passout "pass:$password" \
+              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+            rm "$RUNNER_TEMP/key.pem"
+          fi
+          openssl pkcs12 -in "$p12" -passin "pass:$password" -nokeys -clcerts | openssl x509 -out "$RUNNER_TEMP/cert.pem"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          rm "$p12"
+          security find-identity -v -p codesigning "$keychain" | grep -F "\"$SIGNING_IDENTITY\""
+          echo "SIGNING_CERT_SHA1=$(openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)" >> "$GITHUB_ENV"
+
       - name: Package
         working-directory: packages/desktop
         timeout-minutes: 60
-        # macOS: ad-hoc signature (identity "-"), no notarization; unsigned arm64 apps do not launch.
+        # macOS: no notarization (no Apple account); the dmg itself stays unsigned.
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts \
-              -c.mac.identity=- -c.mac.notarize=false -c.dmg.sign=false
+              -c.mac.identity="$SIGNING_IDENTITY" -c.mac.notarize=false -c.dmg.sign=false
           else
             npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
           fi
@@ -254,9 +304,15 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             app=$(find . -maxdepth 2 -name "*.app" -type d | head -1)
             [ -n "$app" ] || { echo "no .app bundle"; exit 1; }
-            codesign --verify --deep --strict --verbose=2 "$app"
+            # Check as a client would: without trust in the certificate, against the requirement
+            # Squirrel.Mac derives from the installed app.
+            sudo security remove-trusted-cert -d "$RUNNER_TEMP/cert.pem"
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
+            codesign -d -r- "$app"
+            codesign --verify --deep --strict --verbose=2 \
+              -R="identifier \"ai.opencode.desktop\" and certificate leaf = H\"$SIGNING_CERT_SHA1\"" "$app"
             grep -q 'agent.stop' "$app/Contents/Resources/app.asar" || { echo "fork hooks missing in app.asar"; exit 1; }
-            # Ad-hoc signed arm64 apps are killed at launch when the signature is broken: start it once.
+            # arm64 apps are killed at launch when the signature is broken: start it once.
             "$app/Contents/MacOS/OpenCode" > launch.log 2>&1 & pid=$!
             sleep 30
             kill -0 "$pid" || { echo "app exited during launch"; cat launch.log; exit 1; }
@@ -264,12 +320,17 @@ jobs:
             echo "bundle version: $(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$app/Contents/Info.plist") (tag $VERSION)"
             arch=$([ "${{ matrix.target }}" = aarch64-apple-darwin ] && echo arm64 || echo x64)
             tar -czf "$GITHUB_WORKSPACE/assets/opencode-desktop-mac-$arch.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
-            cp opencode-desktop-mac-*.dmg "$GITHUB_WORKSPACE/assets/"
+            # The zip is what electron-updater downloads on macOS.
+            cp opencode-desktop-mac-*.dmg opencode-desktop-mac-*.zip opencode-desktop-mac-*.blockmap "$GITHUB_WORKSPACE/assets/"
           else
             ls opencode-desktop-win-*.exe
             grep -q 'agent.stop' win*-unpacked/resources/app.asar || { echo "fork hooks missing in app.asar"; exit 1; }
-            cp opencode-desktop-win-*.exe "$GITHUB_WORKSPACE/assets/"
+            cp opencode-desktop-win-*.exe opencode-desktop-win-*.exe.blockmap "$GITHUB_WORKSPACE/assets/"
           fi
+          # Per-arch feed files share one name; publish-update-feed merges them.
+          mkdir -p "$GITHUB_WORKSPACE/feed"
+          cp latest*.yml "$GITHUB_WORKSPACE/feed/"
+          cat "$GITHUB_WORKSPACE"/feed/*.yml
           ls -la "$GITHUB_WORKSPACE/assets"
 
       - name: Upload release assets
@@ -292,3 +353,50 @@ jobs:
           name: opencode-desktop-${{ matrix.target }}
           path: assets/*
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: latest-yml-${{ matrix.target }}
+          path: feed/latest*.yml
+          if-no-files-found: error
+
+  publish-update-feed:
+    needs: build-desktop
+    if: github.repository == 'the-ai-r-project/opencode' && (github.event.release.tag_name || inputs.tag)
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: latest-yml-*
+          path: ${{ runner.temp }}/latest-yml
+
+      # Release assets are never replaced, so a re-run can leave older binaries attached than the
+      # ones a fresh feed describes. Clients reject a sha512 mismatch: refuse to publish that feed.
+      - name: Check feed against attached assets
+        run: |
+          mkdir -p "$RUNNER_TEMP/attached"
+          for yml in "$RUNNER_TEMP"/latest-yml/*/latest*.yml; do
+            grep -E '^  - url:|^    sha512:' "$yml" | paste - - | while read -r _ _ url _ sha; do
+              gh release download "$TAG" --pattern "$url" --dir "$RUNNER_TEMP/attached" --clobber
+              actual=$(openssl dgst -sha512 -binary "$RUNNER_TEMP/attached/$url" | base64 -w0)
+              [ "$actual" = "$sha" ] || { echo "$url attached to $TAG does not match $yml"; exit 1; }
+              echo "$url ok"
+            done
+          done
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Merge and upload latest.yml and latest-mac.yml
+        env:
+          LATEST_YML_DIR: ${{ runner.temp }}/latest-yml
+        run: OPENCODE_VERSION="${TAG#v}" bun packages/desktop/scripts/finalize-latest-yml.ts
