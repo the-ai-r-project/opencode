@@ -278,7 +278,9 @@ jobs:
           security import "$p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" login.keychain-db
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          # Trust goes into the signing keychain: a certificate copy in the System keychain has no
+          # private key, and codesign resolving the identity by name would pick that copy.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$RUNNER_TEMP/cert.pem"
           rm "$p12"
           security find-identity -v -p codesigning "$keychain" | grep -F "\"$SIGNING_IDENTITY\""
           echo "SIGNING_CERT_SHA1=$(openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)" >> "$GITHUB_ENV"
@@ -286,11 +288,11 @@ jobs:
       - name: Package
         working-directory: packages/desktop
         timeout-minutes: 60
-        # macOS: no notarization (no Apple account); the dmg itself stays unsigned.
+        # macOS: no notarization and no Apple timestamp (no Apple-issued certificate); the dmg stays unsigned.
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts \
-              -c.mac.identity="$SIGNING_IDENTITY" -c.mac.notarize=false -c.dmg.sign=false
+              -c.mac.identity="$SIGNING_IDENTITY" -c.mac.timestamp=none -c.mac.notarize=false -c.dmg.sign=false
           else
             npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
           fi
