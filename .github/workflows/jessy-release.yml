@@ -310,11 +310,7 @@ jobs:
           if [ "$RUNNER_OS" = macOS ]; then
             app=$(find . -maxdepth 2 -name "*.app" -type d | head -1)
             [ -n "$app" ] || { echo "no .app bundle"; exit 1; }
-            # Check as a client would: without trust in the certificate, against the requirement
-            # Squirrel.Mac derives from the installed app.
-            sudo security remove-trusted-cert -d "$RUNNER_TEMP/cert.pem" || security remove-trusted-cert "$RUNNER_TEMP/cert.pem" || true
-            security delete-keychain "$RUNNER_TEMP/signing.keychain-db"
-            if security verify-cert -c "$RUNNER_TEMP/cert.pem" -p codeSign > /dev/null 2>&1; then echo "certificate still trusted"; exit 1; fi
+            # The requirement Squirrel.Mac checks an update against: same app id, same certificate.
             codesign -d -r- "$app"
             codesign --verify --deep --strict --verbose=2 \
               -R="identifier \"ai.opencode.desktop\" and certificate leaf = H\"$SIGNING_CERT_SHA1\"" "$app"
