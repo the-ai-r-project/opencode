@@ -223,24 +223,6 @@ jobs:
             echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: ./.github/actions/setup-bun
-        with:
-          install-flags: ${{ matrix.bun_install_flags }}
-
-      - name: Prepare
-        working-directory: packages/desktop
-        env:
-          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
-          RUST_TARGET: ${{ matrix.target }}
-        run: bun ./scripts/prepare.ts
-
-      - name: Build
-        working-directory: packages/desktop
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
-          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
-        run: bun run build
-
       - name: Configure AWS credentials
         if: runner.os == 'macOS' && env.TAG != ''
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -273,6 +255,7 @@ jobs:
           openssl pkcs12 -in "$p12" -passin "pass:$password" -nokeys -clcerts | openssl x509 -out "$RUNNER_TEMP/cert.pem"
           keychain="$RUNNER_TEMP/signing.keychain-db"
           security create-keychain -p "$password" "$keychain"
+          [ -n "$TAG" ] || echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           security import "$p12" -k "$keychain" -P "$password" -T /usr/bin/codesign
@@ -284,6 +267,51 @@ jobs:
           rm "$p12"
           security find-identity -v -p codesigning "$keychain" | grep -F "\"$SIGNING_IDENTITY\""
           echo "SIGNING_CERT_SHA1=$(openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d :)" >> "$GITHUB_ENV"
+
+      - name: Debug signing (temporary)
+        if: runner.os == 'macOS' && env.TAG == ''
+        run: |
+          set +e
+          which -a openssl; openssl version
+          openssl x509 -in "$RUNNER_TEMP/cert.pem" -noout -text | sed -n '/X509v3 extensions/,/Signature Algorithm/p'
+          security list-keychains -d user
+          security find-identity -p codesigning
+          security find-certificate -a -c "$SIGNING_IDENTITY" -Z | grep -E "SHA-1|keychain:"
+          security dump-trust-settings -d
+          for i in 1 2 3; do cp /bin/echo "$RUNNER_TEMP/smoke$i"; done
+          echo "--- by name"; codesign -f -s "$SIGNING_IDENTITY" --timestamp=none "$RUNNER_TEMP/smoke1"
+          echo "--- by hash"; codesign -f -s "$SIGNING_CERT_SHA1" --timestamp=none "$RUNNER_TEMP/smoke2"
+          echo "--- by hash + keychain"; codesign -f -s "$SIGNING_CERT_SHA1" --keychain "$RUNNER_TEMP/signing.keychain-db" --timestamp=none "$RUNNER_TEMP/smoke3"
+          for v in nocrit eku_noncrit; do
+            k="$RUNNER_TEMP/$v"
+            if [ $v = nocrit ]; then ext=(-addext "basicConstraints=CA:false" -addext "keyUsage=digitalSignature" -addext "extendedKeyUsage=codeSigning"); else ext=(-addext "basicConstraints=critical,CA:false" -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=codeSigning"); fi
+            openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=Variant $v" "${ext[@]}" -keyout "$k.key" -out "$k.pem" 2>/dev/null
+            openssl pkcs12 -export -inkey "$k.key" -in "$k.pem" -out "$k.p12" -passout pass:x -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+            security import "$k.p12" -k "$RUNNER_TEMP/signing.keychain-db" -P x -T /usr/bin/codesign
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$RUNNER_TEMP/signing.keychain-db" "$k.pem"
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/signing.keychain-db" > /dev/null
+            cp /bin/echo "$k.bin"; echo "--- variant $v"; codesign -f -s "Variant $v" --timestamp=none "$k.bin"
+          done
+          security find-identity -p codesigning
+          exit 1
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          install-flags: ${{ matrix.bun_install_flags }}
+
+      - name: Prepare
+        working-directory: packages/desktop
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          RUST_TARGET: ${{ matrix.target }}
+        run: bun ./scripts/prepare.ts
+
+      - name: Build
+        working-directory: packages/desktop
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+        run: bun run build
 
       - name: Package
         working-directory: packages/desktop
