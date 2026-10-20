@@ -223,6 +223,12 @@ jobs:
             echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
+      # The signing role trusts tag refs only; a dispatch from a branch would fail AssumeRoleWithWebIdentity.
+      - name: Require tag ref for signing
+        if: runner.os == 'macOS' && env.TAG != '' && github.ref != format('refs/tags/{0}', env.TAG)
+        run: |
+          echo "::error::Run against the tag: gh workflow run jessy-release.yml --ref refs/tags/$TAG -f tag=$TAG"
+          exit 1
       - name: Configure AWS credentials
         if: runner.os == 'macOS' && env.TAG != ''
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
