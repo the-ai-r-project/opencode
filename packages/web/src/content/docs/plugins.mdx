@@ -441,4 +441,3 @@ export default (async () => {
 - **When it fires**: Only on clean stops without pending tool calls (not on errors, aborts, or tool-executing turns).
 - **Loop protection**: Capped at 5 forced continuations per loop run to prevent infinite loops.
 - **Continuation**: When rejected, `output.reason` is added as a synthetic user message and the agent continues.
-
