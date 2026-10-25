@@ -1,6 +1,6 @@
 name: jessy-release
 
-# Builds the CLI (macOS, Windows) and the desktop app (macOS, Windows) for fork
+# Builds the CLI (Linux, macOS, Windows) and the desktop app (macOS, Windows) for fork
 # releases (vX.Y.Z-jessy.N). Builds are unsigned (macOS: ad-hoc). Upstream's publish.yml
 # needs Apple/Azure/npm/AUR secrets this fork does not have and stays disabled.
 # Release and tag events read this file from the tagged commit, so it must be
@@ -28,6 +28,67 @@ concurrency:
   group: jessy-release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
 
 jobs:
+  build-linux-cli:
+    if: github.repository == 'the-ai-r-project/opencode'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TARGET: opencode-linux-x64-baseline
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "$TAG" ]; then
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-ci-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "channel=ci" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build
+        working-directory: packages/opencode
+        env:
+          OPENCODE_VERSION: ${{ steps.version.outputs.version }}
+          OPENCODE_CHANNEL: ${{ steps.version.outputs.channel }}
+          OPENCODE_TARGET: ${{ env.TARGET }}
+        run: bun ./script/build.ts
+
+      - name: Verify binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bin="packages/opencode/dist/$TARGET/bin/opencode"
+          actual=$("$bin" --version)
+          [ "$actual" = "$VERSION" ] || { echo "expected $VERSION, got $actual"; exit 1; }
+
+      - name: Package
+        run: tar -czf "$TARGET.tar.gz" -C "packages/opencode/dist/$TARGET/bin" opencode
+
+      - name: Upload release asset
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ env.TARGET }}.tar.gz
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "$ASSET"; then
+            echo "$ASSET is already attached to $TAG, keeping it"
+            exit 0
+          fi
+          gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.TARGET }}
+          path: ${{ env.TARGET }}.tar.gz
+          if-no-files-found: error
+
   build-macos:
     if: github.repository == 'the-ai-r-project/opencode'
     # build.ts only re-signs ad-hoc on a darwin host; unsigned darwin binaries get SIGKILLed by macOS.
