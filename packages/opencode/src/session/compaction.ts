@@ -25,8 +25,8 @@ import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-e
 
 export const Event = SessionCompactionEvent
 
-export const PRUNE_MINIMUM = 20_000
-export const PRUNE_PROTECT = 40_000
+export const PRUNE_MINIMUM = 10_000
+export const PRUNE_PROTECT = 15_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
