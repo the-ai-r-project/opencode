@@ -61,7 +61,7 @@ export namespace RipgrepBinary {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            `$global:ProgressPreference = 'SilentlyContinue'; Expand-Archive -LiteralPath '${archive.replaceAll("'", "''")}' -DestinationPath '${dir.replaceAll("'", "''")}' -Force`,
+            `Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('${archive.replaceAll("'", "''")}', '${dir.replaceAll("'", "''")}')`,
           ])
           if (result.code !== 0)
             throw new Error(
