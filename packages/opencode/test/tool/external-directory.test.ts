@@ -121,7 +121,18 @@ describe("tool.assertExternalDirectory", () => {
             .replaceAll("\\", "/")
             .toLowerCase()
 
-          yield* assertExternalDirectoryEffect(ctx, alt)
+          yield* Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const prev = process.cwd()
+              process.chdir(outerTmp)
+              return prev
+            }),
+            () => assertExternalDirectoryEffect(ctx, alt),
+            (prev) =>
+              Effect.sync(() => {
+                process.chdir(prev)
+              }),
+          )
 
           const req = requests.find((r) => r.permission === "external_directory")
           const expected = glob(path.join(outerTmp, "*"))

@@ -28,7 +28,7 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: ubuntu-latest
+            host: ubuntu-24.04
           - name: windows
             host: windows-latest
     runs-on: ${{ matrix.settings.host }}
@@ -65,8 +65,8 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
-        run: GITHUB_ACTIONS=false bun turbo test
+        timeout-minutes: 30
+        run: GITHUB_ACTIONS=false bun turbo test --concurrency=3
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -87,7 +87,7 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: ubuntu-latest
+            host: ubuntu-24.04
           - name: windows
             host: windows-latest
     runs-on: ${{ matrix.settings.host }}

@@ -8,6 +8,7 @@ const assistant = (
   cost: number,
   providerID = "openai",
   modelID = "gpt-4.1",
+  summary?: boolean,
 ) => {
   return {
     id,
@@ -15,6 +16,7 @@ const assistant = (
     providerID,
     modelID,
     cost,
+    summary,
     tokens: {
       input: tokens.input,
       output: tokens.output,
@@ -65,6 +67,39 @@ describe("getSessionContext", () => {
     expect(ctx?.usage).toBe(50)
     expect(ctx?.providerLabel).toBe("OpenAI")
     expect(ctx?.modelLabel).toBe("GPT-4.1")
+  })
+
+  test("computes post-compaction context from summary output tokens instead of pre-compaction input tokens", () => {
+    const messages = [
+      user("u1"),
+      assistant(
+        "a1",
+        { input: 150_000, output: 2_000, reasoning: 0, read: 0, write: 0 },
+        0.5,
+        "openai",
+        "gpt-4.1",
+        true,
+      ),
+    ]
+    const providers = [
+      {
+        id: "openai",
+        name: "OpenAI",
+        models: {
+          "gpt-4.1": {
+            name: "GPT-4.1",
+            limit: { context: 200_000 },
+          },
+        },
+      },
+    ]
+
+    const ctx = getSessionContext(messages, providers)
+
+    expect(ctx?.message.id).toBe("a1")
+    expect(ctx?.total).toBe(2_000)
+    expect(ctx?.input).toBe(2_000)
+    expect(ctx?.usage).toBe(1)
   })
 
   test("preserves fallback labels and null usage when model metadata is missing", () => {
