@@ -26,6 +26,7 @@ type Context = {
 }
 
 const tokenTotal = (msg: AssistantMessage) => {
+  if (msg.summary) return msg.tokens.output
   return msg.tokens.input + msg.tokens.output + msg.tokens.reasoning + msg.tokens.cache.read + msg.tokens.cache.write
 }
 
@@ -54,7 +55,7 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Context | 
     providerLabel: provider?.name ?? message.providerID,
     modelLabel: model?.name ?? message.modelID,
     limit,
-    input: message.tokens.input,
+    input: message.summary ? message.tokens.output : message.tokens.input,
     total,
     usage: limit ? Math.round((total / limit) * 100) : null,
   }

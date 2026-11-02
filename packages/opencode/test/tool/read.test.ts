@@ -197,7 +197,18 @@ describe("tool.read external_directory permission", () => {
           .replaceAll("\\", "/")
           .toLowerCase()
 
-        yield* exec(dir, { filePath: alt }, next)
+        yield* Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const prev = process.cwd()
+            process.chdir(dir)
+            return prev
+          }),
+          () => exec(dir, { filePath: alt }, next),
+          (prev) =>
+            Effect.sync(() => {
+              process.chdir(prev)
+            }),
+        )
         const read = items.find((item) => item.permission === "read")
         expect(read).toBeDefined()
         expect(read!.patterns).toEqual([path.relative(dir, full(target))])
